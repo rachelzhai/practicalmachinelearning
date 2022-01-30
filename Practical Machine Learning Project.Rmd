@@ -1,0 +1,347 @@
+---
+title: "Practical Machine Learning Project : Predict activity quality from activity monitors"
+author: "Yan Zhai"
+date: "1/28/2022"
+output: html_document
+---
+
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+# Data Loading and Exploratory Analysis
+
+## Dataset overview
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The goal of our project is to predict the manner in which they did the exercise. The outcome variable is `classe`, a factor variable with 5 levels. A short description of `classe` variable is from the authors’ website:
+
+"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes."
+
+## Environment Preparation
+
+We first free up memory and then upload the R libraries that are necessary for the complete analysis. We also set seed for reproducability.
+
+```{r comment=""}
+# free up memory for the download of the data sets
+rm(list=ls()) 
+
+library(knitr)
+library(lattice)
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(corrplot)
+```
+
+```{r comment=""}
+# Set seed for reproducability
+set.seed(9999)
+```
+
+## Data loading and spliting
+
+The next step is loading the data set from the URL provided above. The `training` data is used to devise training and testing sets. The `test` data is used to predict and answer the 20 questions based on the trained model.
+
+```{r comment=""}
+UrlTrain <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+UrlTest  <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+
+training <- read.csv(url(UrlTrain), na.strings=c("NA","#DIV/0!", ""))
+dim(training)
+test  <- read.csv(url(UrlTest), na.strings=c("NA","#DIV/0!", ""))
+dim(test)
+```
+Both created data sets have 160 variables. 
+
+## Data cleaning
+
+Those variables have plenty of NA, which can be removed with the cleaning procedures below. The Near Zero variance (NZV) variables as well as the ID variables are also removed.
+
+
+```{r comment=""}
+# Remove NA. A threshold of 95 % is selected
+na_var <- sapply(training, function(x) mean(is.na(x))) > 0.95
+train_set <- training[ , na_var == FALSE]
+test_set  <- test[ , na_var == FALSE]
+
+# Remove NZV variables
+nzv_var <- nearZeroVar(train_set)
+train_set <- train_set[ , -nzv_var]
+test_set  <- test_set [ , -nzv_var]
+
+# Remove columns 1 to 5 (identification variables) 
+train_set <- train_set[ , -(1:5)]
+test_set  <- test_set [ , -(1:5)]
+
+dim(train_set)
+dim(test_set)
+```
+After data cleaning, the data set remains 54 variables for further analysis.
+
+## Cross validation
+
+Cross-validation is a resampling method that uses different portions of the data to test and train a model on different iterations. The `train_set` data is then split in 2 to create a Train set (70% of the data) for the modeling process and a Test set (with the remaining 30%) for the validations. The `test_set` data set is not changed and will only be used for the quiz results generation.
+
+```{r comment=""}
+inTrain  <- createDataPartition(train_set$classe, p=0.70, list=FALSE)
+sub_train <- train_set[inTrain, ]
+sub_test  <- train_set[-inTrain, ]
+
+dim(sub_train)
+dim(sub_test)
+```
+
+## Expected out-of-sample error
+
+The expected out-of-sample error will correspond to the accuracy in the cross validation data. Accuracy is the proportion of correct classified observation over the total sample in the sub-testing data set. Expected accuracy is the expected accuracy in the out-of-sample data set. 
+
+## EDA
+
+The outcome variable `classe` contains 5 levels. We plot this variable showing the frequency of each class level in the `sub_train` data. The plot indicates that Class A has highest frequency.
+
+```{r comment=""}
+plot(sub_train$classe, main="Histgram of 'classe' variable", xlab="Classe levels", ylab="Frequency")
+```
+
+# Prediction Model Building
+
+With `sub_train` data, we create three models based on the regression methods including generalized boosted model, decision tree,and random forests. We also calculate the accuracy of each model for further comparison to find the best model for the prediction exercise.
+
+## General Boosted Model
+
+```{r comment=""}
+set.seed(112233)
+
+# Set up train control
+traincrl_GBM <- trainControl(method = "repeatedcv", number = 5, repeats = 2)
+# Fit the model
+model_GBM  <- train(classe ~ ., data = sub_train, method = "gbm",
+                  trControl = traincrl_GBM, verbose = FALSE)
+model_GBM$finalModel
+```
+We make the prediction of `classe` variable based on this general boosted model, and compare the predicted values with actual `sub_test` data set. The accuracy of this model is 0.9867.
+
+```{r comment=""}
+# Perform prediction 
+predict_GBM <- predict(model_GBM, newdata = sub_test)
+# Confusion matrix
+conf_matrix_GBM <- confusionMatrix(table(predict_GBM, sub_test$classe))
+conf_matrix_GBM
+```
+
+## Decision Tree Model
+
+```{r comment=""}
+set.seed(445566)
+# Fit the model
+model_DT <- rpart(classe ~ ., data = sub_train, method="class")
+fancyRpartPlot(model_DT, main="Classification Tree")
+rpart.plot(model_DT, main="Classification Tree", extra=102, under=TRUE, faclen=0)
+```
+We make the prediction of `classe` variable based on this decision tree model, and compare the predicted values with actual `sub_test` data set. The accuracy of this model is 0.7415.
+
+```{r comment=""}
+# Perform prediction
+predict_DT <- predict(model_DT, newdata = sub_test, type="class")
+# Confusion matrix
+conf_matrix_DT <- confusionMatrix(table(predict_DT, sub_test$classe))
+conf_matrix_DT
+```
+
+## Random forest
+
+```{r comment=""}
+set.seed(778899)
+# Set up train control
+ctrl_RF <- trainControl(method = "repeatedcv", number = 5, repeats = 2)
+# Fit the model
+model_RF  <- train(classe ~ ., data = sub_train, method = "rf",
+                 trControl = ctrl_RF, verbose = FALSE)
+model_RF$finalModel
+```
+
+We make the prediction of `classe` variable based on this random forest model, and compare the predicted values with actual `sub_test` data set. The accuracy of this model is 0.9985.
+
+```{r comment=""}
+# Perform prediction
+predict_RF <- predict(model_RF, newdata = sub_test)
+# Confusion matrix
+conf_matrix_RF <- confusionMatrix(table(predict_RF, sub_test$classe))
+conf_matrix_RF
+```
+
+# Evaluate the Models
+
+The summary of the predictive accuracy of the three models evaluated is as follows:
+
+  + General boosted model has a decent accuracy (0.9867), which is a little bit lower  than the accuracy from Random forest model
+  + Decision tree model has the low mean and the highest standard deviation, and its accuracy (0.7415) is the lowest.  
+  + Random forest model has the highest accuracy (0.9985) and lowest standard deviation.
+
+# Expected out-of-sample error
+
+With an accuracy above 99% on our cross-validation data, we can expect that very few, or none, of the test samples will be missclassified.
+
+
+# Conclusion
+
+The Random Forest model is selected and applied to make predictions on the 20 data points from the original testing data set.
+
+# Applying the Selected Model to the Test Data
+
+```{r comment=""}
+predictTEST <- predict(model_RF, newdata=test)
+predictTEST
+```
+
+```{r comment=""}
+
+```
+
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
+
+```{r comment=""}
+
+```
+
+```{r comment=""}
+
+```
+
